@@ -18,7 +18,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class PersistingWrapper {
     private static final Path STATE_PATH = Path.of("coroutine");
@@ -82,16 +81,23 @@ public class PersistingWrapper {
                     var references = kryo.getReferenceResolver();
                     references.setReadObject(references.nextReadId(null), persistedContinuation.getContext());
                     references.setReadObject(references.nextReadId(null), persistedContinuation);
-                    var cancellableContinuationReference = new AtomicReference<CancellableContinuation<? super Unit>>();
-                    var coroutineSuspended = CancellableContinuationKt.suspendCancellableCoroutine(
-                            cancellableContinuation -> {
-                                cancellableContinuationReference.set(cancellableContinuation);
-                                return Unit.INSTANCE;
-                            }, (Continuation<Unit>) kryo.readClassAndObject(input)
-                    );
-                    // Hacky way to receive COROUTINE_SUSPENDED from suspendCancellableCoroutine
-                    cancellableContinuationReference.get().resume(Unit.INSTANCE, null);
-                    return coroutineSuspended;
+                    return new Function1<CancellableContinuation<? super Unit>, Unit>() {
+                        CancellableContinuation<? super Unit> cancellableContinuation;
+
+                        @Override
+                        public Unit invoke(CancellableContinuation<? super Unit> cancellableContinuation) {
+                            this.cancellableContinuation = cancellableContinuation;
+                            return Unit.INSTANCE;
+                        }
+
+                        Object get() {
+                            var coroutineSuspended = CancellableContinuationKt.suspendCancellableCoroutine(
+                                    this, (Continuation<Unit>) kryo.readClassAndObject(input)
+                            );
+                            cancellableContinuation.resume(Unit.INSTANCE, null);
+                            return coroutineSuspended;
+                        }
+                    }.get();
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
