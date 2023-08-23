@@ -14,7 +14,6 @@ import org.jetbrains.annotations.Nullable;
 import org.objenesis.instantiator.ObjectInstantiator;
 
 import java.io.IOException;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,7 +22,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class PersistingWrapper {
     private static final Path STATE_PATH = Path.of("coroutine");
-    private static final Path OUTPUT_PATH = Path.of("coroutine.tmp");
 
     private static class PersistedContinuation<T> implements Continuation<T> {
         private final Continuation<? super T> continuation;
@@ -57,18 +55,18 @@ public class PersistingWrapper {
         @Override
         public Object persist(@NotNull Continuation<? super Unit> $completion) {
             try {
-                try (Output output = new Output(Files.newOutputStream(OUTPUT_PATH))) {
-                    Kryo kryo = getKryo();
+                var tempFile = Files.createTempFile(null, null);
+                try (var output = new Output(Files.newOutputStream(tempFile))) {
+                    var kryo = getKryo();
                     kryo.getReferenceResolver().addWrittenObject(persistedContinuation.getContext());
                     kryo.getReferenceResolver().addWrittenObject(persistedContinuation);
                     kryo.writeClassAndObject(output, $completion);
                 }
-                Files.move(OUTPUT_PATH, STATE_PATH, StandardCopyOption.ATOMIC_MOVE);
+                Files.move(tempFile, STATE_PATH, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-            throw new RuntimeException("persisted");
-//            return Unit.INSTANCE;
+            return Unit.INSTANCE;
         }
     }
 
@@ -77,7 +75,7 @@ public class PersistingWrapper {
                 @NotNull Function1<? super Continuation<? super T>, ?> function1,
                 @NotNull Continuation<? super T> continuation
         ) {
-            PersistedContinuation<T> persistedContinuation = new PersistedContinuation<>(continuation);
+            var persistedContinuation = new PersistedContinuation<>(continuation);
             if (Files.exists(STATE_PATH)) {
                 try (var input = new Input(Files.newInputStream(STATE_PATH))) {
                     var kryo = getKryo();
@@ -85,7 +83,7 @@ public class PersistingWrapper {
                     references.setReadObject(references.nextReadId(null), persistedContinuation.getContext());
                     references.setReadObject(references.nextReadId(null), persistedContinuation);
                     var cancellableContinuationReference = new AtomicReference<CancellableContinuation<? super Unit>>();
-                    Object coroutineSuspended = CancellableContinuationKt.suspendCancellableCoroutine(
+                    var coroutineSuspended = CancellableContinuationKt.suspendCancellableCoroutine(
                             cancellableContinuation -> {
                                 cancellableContinuationReference.set(cancellableContinuation);
                                 return Unit.INSTANCE;
@@ -104,24 +102,24 @@ public class PersistingWrapper {
 
     @NotNull
     private static Kryo getKryo() {
-        Kryo kryo = new Kryo();
+        var kryo = new Kryo();
         kryo.setAutoReset(false);
         kryo.setRegistrationRequired(false);
         kryo.setReferences(true);
         kryo.setInstantiatorStrategy(new DefaultInstantiatorStrategy() {
             @Override
             public ObjectInstantiator<?> newInstantiatorOf(Class type) {
-                Class<?> klass = type;
+                var klass = (Class<?>) type;
                 var kotlinClass = JvmClassMappingKt.getKotlinClass(klass);
                 try {
-                    Object objectInstance = kotlinClass.getObjectInstance();
+                    var objectInstance = kotlinClass.getObjectInstance();
                     if (objectInstance != null) {
                         return () -> objectInstance;
                     }
                 } catch (UnsupportedOperationException ignored) {
                 }
                 try {
-                    Constructor<?> constructor = klass.getDeclaredConstructor(Continuation.class);
+                    var constructor = klass.getDeclaredConstructor(Continuation.class);
                     return () -> {
                         try {
                             return constructor.newInstance((Continuation<?>) null);

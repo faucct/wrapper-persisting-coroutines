@@ -2,22 +2,38 @@ import PersistingWrapper.wrapper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
+import java.util.UUID
 import kotlin.coroutines.coroutineContext
 
-suspend fun foo() {
-  println("hi")
-  coroutineContext[Persistor.Key]!!.persist()
-  bar()
-  println("then")
+var resumed = true
+
+private suspend fun persist() {
+  resumed = false
+  coroutineContext[Persistor]!!.persist()
+  if (!resumed) {
+    throw RuntimeException("persisted")
+  }
+  resumed = true
+}
+
+suspend fun foo(a: String, b: String) {
+  val idempotencyKey = UUID.randomUUID().toString()
+  println("hi $idempotencyKey")
+  persist()
+  println("then $idempotencyKey")
+  bar(b)
+  println(a)
   delay(1000)
   yield()
   println("later")
 }
 
-suspend fun bar() {
+suspend fun bar(b: String) {
   println("bar")
-  coroutineContext[Persistor.Key]!!.persist()
+  persist()
   println("then")
+  println(b)
+  yield()
   delay(1000)
   yield()
   println("later")
@@ -26,7 +42,7 @@ suspend fun bar() {
 fun main() {
   val message = runBlocking {
     wrapper {
-      foo()
+      foo("a", "b")
       "foo"
     }
   }
